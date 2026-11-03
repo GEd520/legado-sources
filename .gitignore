@@ -1,26 +1,24 @@
-node_modules/
-.sim-state.json
 
+# wrangler 登录态 / 本地缓存
+# ── 受保护的远程逻辑：只存于门禁 KV + 本机，绝不进公开仓库 ──
 # ── 绝不能进仓库 ──
-config.json
-gate/master.key
-gate/secrets.json
+# 构建时可能产生的临时物
 *.master.key
 *.secrets.json
 .env
 .env.*
-worker/.dev.vars
-tools/.git-creds-tmp
-# wrangler 登录态 / 本地缓存
-.wrangler/
-worker/.wrangler/
-proxy/.wrangler/
-tmp-shot/
-
-# 构建时可能产生的临时物
-dist/libs/gate-*.json
-dist/libs/*.js
-
-# ── 受保护的远程逻辑：只存于门禁 KV + 本机，绝不进公开仓库 ──
-sources/libs/
 .rhino/
+.sim-state.json
+.wrangler/
+config.json
+dist/libs/*.js
+dist/libs/gate-*.json
+gate/master.key
+gate/secrets.json
+node_modules/
+proxy/.wrangler/
+sources/libs/
+tmp-shot/
+tools/.git-creds-tmp
+worker/.dev.vars
+worker/.wrangler/

@@ -1,7 +1,7 @@
 {
   "schema": 2,
-  "version": "1793691570151",
-  "updated": "2026-11-03 07:39:30",
+  "version": "1793691729700",
+  "updated": "2026-11-03 07:42:09",
   "rawBase": "https://raw.githubusercontent.com/GEd520/legado-sources/main/",
   "mirrors": [
     "",
@@ -45,10 +45,10 @@
     {
       "key": "console",
       "name": "🌐 书源控制台",
-      "version": "1793691570151",
+      "version": "1793691729700",
       "desc": "书源/订阅源总控面板",
       "file": "dist/rss/console.json",
-      "sha256": "adc8c31bb517f050"
+      "sha256": "49412097fc43d665"
     }
   ],
   "bundleSha": "f97c0974f4f76c23"

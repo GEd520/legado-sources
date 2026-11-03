@@ -51,10 +51,21 @@ const loginKey = Buffer.from(`${now.getFullYear()}${String(now.getMonth() + 1).p
 w('login.txt', loginKey);
 w('customurl.txt', '');
 
-/* ---------- 取一份真实密文 ---------- */
-const gateUrl = (cfg.gate && cfg.gate.url) || '';
+/* ---------- 取一份真实密文 ----------
+ * 优先级：
+ *   1) 本地已缓存的 .rhino/vm/sealed.json（离线环境用，可由外部注入）
+ *   2) 直接请求门禁
+ * 本机若处于被墙/代理 TUN 环境，CF 边缘会被 RST，这时用 1) 即可。 */
+const sealedFile = path.join(VM, 'sealed.json');
 let sealed = null;
-if (gateUrl) {
+if (fs.existsSync(sealedFile)) {
+  try {
+    const j = JSON.parse(fs.readFileSync(sealedFile, 'utf8'));
+    if (j && j.ok && j.ct) { sealed = j; console.log('  · 使用本地注入的密文（离线模式）'); }
+  } catch (e) { }
+}
+const gateUrl = (cfg.gate && cfg.gate.url) || '';
+if (!sealed && gateUrl) {
   try {
     const ts = Date.now();
     const res = await fetch(`${gateUrl}/k?kid=${encodeURIComponent(key)}&ts=${ts}`, {
@@ -63,7 +74,9 @@ if (gateUrl) {
     const j = await res.json();
     if (j.ok) sealed = j;
   } catch (e) {
-    console.log('  ! 门禁不可达（' + ((e.cause && e.cause.code) || e.message) + '），跳过在线段');
+    const c = (e.cause && e.cause.code) || e.message;
+    console.log('  ! 门禁不可达（' + c + '）');
+    console.log('    本机若在墙内/代理 TUN 下，CF 边缘会被 RST —— 可把密文放到 .rhino/vm/sealed.json 走离线模式');
   }
 }
 w('resp.json', sealed ? JSON.stringify(sealed) : '{}');

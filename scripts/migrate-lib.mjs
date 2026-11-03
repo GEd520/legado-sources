@@ -28,9 +28,12 @@ for (const f of fs.readdirSync(SRC).filter(x => x.endsWith('.json'))) {
   const moved = {};
   for (const field of FIELDS) {
     const v = o[field];
-    if (typeof v !== 'string' || v.length < 2000) continue;
-    // 必须是 `@js: ... ` 且结尾是 `html;` 这类纯返回
+    if (typeof v !== 'string' || v.length < 500) continue;
+    // 已经是门禁壳就跳过（幂等）
+    if (/GLIB\(/.test(v)) { console.log(`  - ${key}.${field}: 已是门禁壳`); continue; }
     if (!/^@js:/.test(v)) continue;
+    // 只迁不依赖 {{模板}} 求值的纯 JS（含 {{...}} 的模板由阅读自己处理，挪走会坏）
+    if (/\{\{[^}]+\}\}/.test(v)) { console.log(`  - ${key}.${field}: 含 {{模板}}，不迁移（避免语义变化）`); continue; }
     if (/java\.(get|ajax|connect|post)\s*\(/.test(v)) { console.log(`  ! ${key}.${field} 含网络请求，跳过`); continue; }
     moved[field] = v;
     o[field] = `@js:\nGLIB('${field === 'exploreUrl' ? 'explore' : field}', getUrl());`;
