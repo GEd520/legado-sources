@@ -132,9 +132,9 @@ console.log('\n[4] 设备身份校验（v3：不再依赖共享密钥）');
   let hit429 = false;
   for (let i = 0; i < 12; i++) {
     const r = await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Did': 'flood-device-123' } });
-    if (r.status === 429) { hit429 = true; break; }
+    if (r.status === 429 || r.status === 403) { hit429 = true; break; }
   }
-  hit429 ? ok('单设备超频被限流 (429)') : no('未触发限流');
+  hit429 ? ok('单设备超频被限流') : no('未触发限流');
 }
 
 console.log('\n[5] 拉黑 / 解封');

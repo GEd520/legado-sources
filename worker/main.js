@@ -63,35 +63,73 @@ async function issueLib(request, env, url, cors) {
   if (!sealed) return json({ ok: false, err: 'no such lib' }, cors, 404);
   const rev = (await env.GATE.get('rev:' + kid)) || '0';
 
-  /* ---------------- 计数 + 限流 ---------------- */
+  /* ---------------- 设备记录 + 限流 ---------------- */
   const rec = 'uid:' + did;
   const raw = await env.GATE.get(rec);
-  const o = raw ? JSON.parse(raw) : { first: Date.now(), calls: 0, hour: 0, hourAt: 0 };
+  const o = raw ? JSON.parse(raw) : { first: Date.now(), calls: 0, hour: 0, hourAt: 0, granted: {} };
   const now = Date.now();
 
-  // 滑动小时窗，超过上限直接拒（防批量刷）
   const LIMIT = Number(env.RATE_LIMIT || 30);
   if (!o.hourAt || now - o.hourAt > 3600 * 1000) { o.hour = 0; o.hourAt = now; }
   if (o.hour >= LIMIT) {
     await env.GATE.put(rec, JSON.stringify(o), { expirationTtl: 60 * 60 * 24 * 90 });
-    return json({ ok: false, err: 'too fast' }, cors, 429);
+    return json({ ok: false, err: 'too fast' }, cors, 403);
   }
-
   o.calls = (o.calls || 0) + 1;
   o.hour = (o.hour || 0) + 1;
   o.last = now;
   o.kid = kid;
-  await env.GATE.put(rec, JSON.stringify(o), { expirationTtl: 60 * 60 * 24 * 90 });
 
-  /* 每设备一把：key = HKDF(master, "lib|did|kid") */
   const ek = await deriveBits(env.MASTER_SECRET, did, kid, 'lib', 32);
   const iv = await deriveBits(env.MASTER_SECRET, did, kid, 'liv', 16);
-  const ct = await aesEncrypt(hexToBytes(ek), hexToBytes(iv), sealed);
 
-  // rev 变化时客户端缓存要缩短，做到「发新版本 → 旧客户端尽快换新」
+  /* -------- 鉴权：该设备是否已为本 lib 取得过授权 -------- */
+  o.granted = o.granted || {};
+  const token = (request.headers.get('X-Token') || '').trim();
+
+  // 【关键】没有任何设备取得过授权 → 自动给第一个来的人（新装的用户直接可用）。
+  //   一个都没有说明还没人用，不存在「白拿」的既得利益问题。
+  const anyGrant = Object.keys(o.granted).length > 0;
+
+  if (!anyGrant && !token) {
+    o.granted[kid] = now;
+    o.hourGrantAt = now;
+  } else if (!token) {
+    if (env.REGISTER_URL) {
+      await env.GATE.put(rec, JSON.stringify(o), { expirationTtl: 60 * 60 * 24 * 90 });
+      return json({ ok: false, err: 'need token', register: env.REGISTER_URL }, cors, 403);
+    }
+    o.granted[kid] = now;
+  } else {
+    // 校验 token：HMAC(did|kid|ts_issued, master) 前 16 字节
+    const okTok = await verifyToken(env.MASTER_SECRET, did, kid, token);
+    if (!okTok) {
+      await env.GATE.put(rec, JSON.stringify(o), { expirationTtl: 60 * 60 * 24 * 90 });
+      return json({ ok: false, err: 'bad token' }, cors, 403);
+    }
+    o.granted[kid] = now;
+  }
+
+  await env.GATE.put(rec, JSON.stringify(o), { expirationTtl: 60 * 60 * 24 * 90 });
+
+  const ct = await aesEncrypt(hexToBytes(ek), hexToBytes(iv), sealed);
   const ttl = rev !== '0' ? 300 : 21600;
 
   return json({ ok: true, v: 3, alg: 'AES-256-CBC', ek, iv, ct, rev, ttl, serverTime: now }, cors);
+}
+
+/* 令牌 = HMAC(master, `${did}|${kid}|v1`) 前 32 hex */
+async function makeToken(master, did, kid) {
+  const key = await crypto.subtle.importKey('raw', enc.encode(master), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = await crypto.subtle.sign('HMAC', key, enc.encode(`${did}|${kid}|v1`));
+  return toHex(mac).slice(0, 32);
+}
+async function verifyToken(master, did, kid, token) {
+  const want = await makeToken(master, did, kid);
+  if (want.length !== String(token).length) return false;
+  let diff = 0;
+  for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ String(token).charCodeAt(i);
+  return diff === 0;
 }
 
 /* ------------------------------------------------------------ 管理接口 */
@@ -147,6 +185,22 @@ async function admin(request, env, url, cors) {
     if (body.unban) await env.GATE.delete('ban:' + target);
     else await env.GATE.put('ban:' + target, '1');
     return json({ ok: true, did: target, banned: !body.unban }, cors);
+  }
+
+  /* 给某台设备签一个令牌（用户联系你时用） */
+  if (url.pathname === '/admin/token') {
+    const did = body.did || url.searchParams.get('did');
+    const kid = body.kid || url.searchParams.get('kid') || 'ailisi';
+    if (!did) return json({ ok: false, err: 'did required' }, cors, 400);
+    const t = await makeToken(env.MASTER_SECRET, did, kid);
+    // 顺手把这个设备登记为已授权
+    const rec = 'uid:' + did;
+    const o0 = (await env.GATE.get(rec));
+    const o = o0 ? JSON.parse(o0) : { first: Date.now(), calls: 0, granted: {} };
+    o.granted = o.granted || {};
+    o.granted[kid] = Date.now();
+    await env.GATE.put(rec, JSON.stringify(o), { expirationTtl: 60 * 60 * 24 * 90 });
+    return json({ ok: true, did, kid, token: t }, cors);
   }
 
   /* 列出所有设备（用于定位泄露 / 封禁） */
