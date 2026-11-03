@@ -1,24 +1,32 @@
+node_modules/
+.sim-state.json
 
-# wrangler 登录态 / 本地缓存
-# ── 受保护的远程逻辑：只存于门禁 KV + 本机，绝不进公开仓库 ──
 # ── 绝不能进仓库 ──
-# 构建时可能产生的临时物
+config.json
+gate/master.key
+gate/secrets.json
 *.master.key
 *.secrets.json
 .env
 .env.*
-.rhino/
-.sim-state.json
-.wrangler/
-config.json
-dist/libs/*.js
-dist/libs/gate-*.json
-gate/master.key
-gate/secrets.json
-node_modules/
-proxy/.wrangler/
-sources/libs/
-tmp-shot/
-tools/.git-creds-tmp
 worker/.dev.vars
+tools/.git-creds-tmp
+# wrangler 登录态 / 本地缓存
+.wrangler/
 worker/.wrangler/
+proxy/.wrangler/
+tmp-shot/
+
+# 构建时可能产生的临时物
+dist/libs/gate-*.json
+dist/libs/*.js
+
+# ── 受保护的远程逻辑：只存于门禁 KV + 本机，绝不进公开仓库 ──
+sources/libs/
+.rhino/
+
+# ── 库文件策略（2026-11 调整）──
+# libs/*.js 是明文源码，只在工作区；仓库里放 scripts/obf.mjs 生成的 dist-src/
+libs/
+# dist-src 是产物，要提交（App 从 dist 取，构建从 dist-src 混淆件取）
+!dist-src/

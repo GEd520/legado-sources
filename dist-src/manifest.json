@@ -1,0 +1,29 @@
+{
+  "built": "2026-11-03T07:46:19.194Z",
+  "files": [
+    {
+      "name": "gate.js",
+      "src": 13452,
+      "out": 12851,
+      "sha": "5fca16341a2e"
+    },
+    {
+      "name": "hotload.js",
+      "src": 6920,
+      "out": 7605,
+      "sha": "ac6c5e9b6ec1"
+    },
+    {
+      "name": "hub.js",
+      "src": 7841,
+      "out": 8576,
+      "sha": "b9d6a25e9d27"
+    },
+    {
+      "name": "panel.js",
+      "src": 8985,
+      "out": 12767,
+      "sha": "9c3dbf1d7450"
+    }
+  ]
+}

@@ -33,6 +33,67 @@ const BEGIN = '/* ==== HUB-LIB BEGIN (由 build.mjs 生成，勿手改) ==== */'
 const END = '/* ==== HUB-LIB END ==== */';
 
 const read = (p) => fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, '');
+
+/* 体积压缩：只删注释和行尾空白，绝不动任何有效字符。
+   jsLib 里最要命的是大段说明注释 —— 每字节都要用户下载一次。
+   注意：必须保留换行，否则 // 注释后面的代码会被吞掉。 */
+function stripComments(code) {
+    let out = '';
+    let i = 0, n = code.length;
+    let last = '';          // 上一个非空白字符，用来判断 / 是除号还是正则
+    while (i < n) {
+        const c = code[i], d = code[i + 1];
+        // 注释
+        if (c === '/' && d === '*') {
+            const e = code.indexOf('*/', i + 2);
+            const body = code.slice(i, e < 0 ? n : e + 2);
+            /* HUB-LIB 标记必须留着：构建幂等靠它认旧块，测试也靠它查重复注入 */
+            if (body.indexOf('HUB-LIB') >= 0) { out += body; last = '/'; i = e < 0 ? n : e + 2; continue; }
+            i = e < 0 ? n : e + 2;
+            continue;
+        }
+        if (c === '/' && d === '/') {
+            const e = code.indexOf('\n', i);
+            i = e < 0 ? n : e;
+            continue;
+        }
+        // 字符串 / 模板 / 正则：原样拷贝
+        if (c === '"' || c === "'" || c === '`') {
+            let j = i + 1;
+            while (j < n) {
+                if (code[j] === '\\') { j += 2; continue; }
+                if (code[j] === c) { j++; break; }
+                j++;
+            }
+            out += code.slice(i, j);
+            last = c;
+            i = j;
+            continue;
+        }
+        if (c === '/' && (last === '' || /[(,=:[!&|?{};+\-*%~^<>]/.test(last))) {
+            // 正则字面量
+            let j = i + 1, cls = false;
+            while (j < n) {
+                const ch = code[j];
+                if (ch === '\\') { j += 2; continue; }
+                if (ch === '[') cls = true;
+                else if (ch === ']') cls = false;
+                else if (ch === '/' && !cls) { j++; break; }
+                else if (ch === '\n') break;
+                j++;
+            }
+            out += code.slice(i, j);
+            last = '/';
+            i = j;
+            continue;
+        }
+        out += c;
+        if (!/\s/.test(c)) last = c;
+        i++;
+    }
+    // 行尾空白 + 连续空行
+    return out.replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n');
+}
 const sha = (s) => crypto.createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16);
 const listJson = (dir) => fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort() : [];
 
@@ -45,11 +106,19 @@ let problems = [];
 const ok = (m) => console.log('  ✓ ' + m);
 const bad = (m) => { problems.push(m); console.log('  ✗ ' + m); };
 
-/* ---------------------------------------------------------------- 1. 读库 */
-const hubJs = read(path.join(LIBS, 'hub.js'));
-const hotJs = read(path.join(LIBS, 'hotload.js'));
-const panelJs = fs.existsSync(path.join(LIBS, 'panel.js')) ? read(path.join(LIBS, 'panel.js')) : '';
-const gateJs = fs.existsSync(path.join(LIBS, 'gate.js')) ? read(path.join(LIBS, 'gate.js')) : '';
+/* ---------------------------------------------------------------- 1. 读库
+ * 优先用 dist-src/ 里的混淆产物（这是要进公开仓库的那份）；
+ * 没有就退回 libs/ 明文源码（本地开发时方便调试）。
+ * 混淆产物能不能在 Rhino 上跑，由 tools/vm-test.mjs 把关。 */
+const OBF = path.join(ROOT, 'dist-src');
+const useObf = fs.existsSync(OBF) && !process.argv.includes('--plain');
+const LIB_DIR = useObf ? OBF : LIBS;
+const libOf = (n) => { const p = path.join(LIB_DIR, n); return fs.existsSync(p) ? read(p) : ''; };
+const hubJs = libOf('hub.js');
+const hotJs = libOf('hotload.js');
+const panelJs = libOf('panel.js');
+const gateJs = libOf('gate.js');
+if (useObf) console.log('  · 使用 dist-src/ 混淆产物构建（公开仓库版本）');
 const GATE = CFG.gate || {};
 // 只有配了门禁地址才注入；没配就保持纯热更新模式（不至于把源弄挂）
 const GATE_ON = !!(GATE.url && gateJs);
@@ -66,6 +135,13 @@ function injectHublib(jsLib, key) {
     let lib = jsLib || '';
     const b = lib.indexOf(BEGIN), e = lib.indexOf(END);
     if (b >= 0 && e > b) lib = lib.slice(0, b) + lib.slice(e + END.length);
+    /* 源文件里如果还留着旧的「手工粘贴版」注入块（没有 BEGIN/END 标记，
+       但带着 gate.js / hotload.js 的特征），一并剥掉，避免 dist 里重复。 */
+    const LEGACY = /\n?\/\* -{3} 该源的远程逻辑入口[\s\S]*?function GINFO\(\)[\s\S]*?\n?/;
+    if (LEGACY.test(lib)) lib = lib.replace(LEGACY, '\n');
+    const LEGACY2 = /\n?\/\* -{3} 门禁 -{10,}[\s\S]*?function GINFO\(\) \{[^}]*\}[\s\S]*?\n?/;
+    if (LEGACY2.test(lib)) lib = lib.replace(LEGACY2, '\n');
+    lib = lib.replace(/\n{3,}/g, '\n\n').replace(/^\s+/, '');
 
     const hubJs = read(path.join(ROOT, 'libs', 'hub.js'));
     const hotJs = read(path.join(ROOT, 'libs', 'hotload.js'));
@@ -125,7 +201,8 @@ function injectHublib(jsLib, key) {
         END
     ].join('\n');
 
-    return (lib + '\n' + block + '\n').replace(/^\s+/, '');
+    /* 注入块里的注释对 App 毫无用处，全部压掉（注释在构建脚本里留着当文档） */
+    return (lib + '\n' + stripComments(block) + '\n').replace(/^\s+/, '');
 }
 
 /* --------------------------------------------------- 3. 处理每个书源 */
