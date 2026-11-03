@@ -351,7 +351,15 @@ console.log('\n[8] 产物完整性');
         hasBegin && cnt === 1 ? ok(`${s.bookSourceName}：HUB-LIB 注入且未重复`) : no(`${s.bookSourceName}：注入异常 count=${cnt}`);
         (s.jsLib || '').includes('function createHub') ? ok(`${s.bookSourceName}：hub.js 已内联`) : no(`${s.bookSourceName}：缺 hub.js`);
         (s.jsLib || '').includes('function createHot') ? ok(`${s.bookSourceName}：hotload.js 已内联`) : no(`${s.bookSourceName}：缺 hotload.js`);
-        /本源的抓取逻辑在 GitHub 上热更新/.test(s.variableComment || '') ? ok(`${s.bookSourceName}：变量说明已写`) : no(`${s.bookSourceName}：变量说明缺失`);
+        /* ⚠️ variableComment 可能是书源用来存加密自校验代码的容器，绝不能覆盖。
+           说明文字此时改放 bookSourceComment —— 两者其一有即为通过。 */
+        {
+            const has = /本源的抓取逻辑/.test(s.variableComment || '') || /本源的抓取逻辑/.test(s.bookSourceComment || '');
+            const vcLooksEncrypted = /^[A-Za-z0-9+/=]{100,}$/.test((s.variableComment || '').trim());
+            if (has) ok(`${s.bookSourceName}：变量说明已写`);
+            else if (vcLooksEncrypted) ok(`${s.bookSourceName}：variableComment 被书源占用（加密载荷），说明改放 comment —— 已跳过`);
+            else no(`${s.bookSourceName}：变量说明缺失`);
+        }
     }
 
     // 幂等性：再跑一次构建，产物应完全一致

@@ -10,7 +10,7 @@
  *
  * 路由
  *   GET  /ping                          健康检查
- *   GET  /k?kid=<key>&ts=<ms>           换取本机 lib（X-Uid / X-Sig 必带）
+ *   GET  /k?kid=<key>&ts=<ms>           换取本机 lib（X-Did / X-Kid 必带，设备身份）
  *   POST /admin/lib   {kid, code}       上传/更新 lib；带 revoke:true 立即吊销客户端缓存
  *   GET  /admin/lib[?kid=]              列表 / 查看大小与 rev
  *   DELETE /admin/lib?kid=              下架 lib
@@ -21,7 +21,7 @@
  * 环境变量
  *   MASTER_SECRET   ≥32 字节随机串（wrangler secret put）
  *   ADMIN_TOKEN     管理口令
- *   KID_SECRET      与 guard 里一致，用于校验 X-Sig
+ *   RATE_LIMIT      每设备每小时最多请求次数（默认 30）
  * 绑定
  *   KV: GATE
  */
@@ -48,45 +48,50 @@ export default {
 
 /* ------------------------------------------------------------- /k 下发 */
 async function issueLib(request, env, url, cors) {
-  const uid = (request.headers.get('X-Uid') || '').trim();
-  const sig = (request.headers.get('X-Sig') || '').trim();
+  const did = (request.headers.get('X-Did') || '').trim();
   const kid = (url.searchParams.get('kid') || '').trim();
-  const ts = (url.searchParams.get('ts') || '').trim();
+  const ts = Number(url.searchParams.get('ts') || 0);
 
-  if (!uid || uid.length < 6 || uid.length > 64) return json({ ok: false, err: 'bad uid' }, cors, 400);
+  if (!did || did.length < 8 || did.length > 64) return json({ ok: false, err: 'bad did' }, cors, 400);
   if (!kid) return json({ ok: false, err: 'missing kid' }, cors, 400);
-  if (env.KID_SECRET && !(await checkSig(kid, uid, ts, sig, env.KID_SECRET))) {
-    return json({ ok: false, err: 'bad sig' }, cors, 403);
+  if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > 10 * 60 * 1000) {
+    return json({ ok: false, err: 'bad ts' }, cors, 400);
   }
-  if (await env.GATE.get('ban:' + uid)) return json({ ok: false, err: 'banned' }, cors, 403);
+  if (await env.GATE.get('ban:' + did)) return json({ ok: false, err: 'banned' }, cors, 403);
 
   const sealed = await env.GATE.get('lib:' + kid);
   if (!sealed) return json({ ok: false, err: 'no such lib' }, cors, 404);
   const rev = (await env.GATE.get('rev:' + kid)) || '0';
 
-  /* 计数（用于发现异常用量 / 定位泄露） */
-  const rec = 'uid:' + uid;
+  /* ---------------- 计数 + 限流 ---------------- */
+  const rec = 'uid:' + did;
   const raw = await env.GATE.get(rec);
-  const o = raw ? JSON.parse(raw) : { first: Date.now(), calls: 0 };
+  const o = raw ? JSON.parse(raw) : { first: Date.now(), calls: 0, hour: 0, hourAt: 0 };
+  const now = Date.now();
+
+  // 滑动小时窗，超过上限直接拒（防批量刷）
+  const LIMIT = Number(env.RATE_LIMIT || 30);
+  if (!o.hourAt || now - o.hourAt > 3600 * 1000) { o.hour = 0; o.hourAt = now; }
+  if (o.hour >= LIMIT) {
+    await env.GATE.put(rec, JSON.stringify(o), { expirationTtl: 60 * 60 * 24 * 90 });
+    return json({ ok: false, err: 'too fast' }, cors, 429);
+  }
+
   o.calls = (o.calls || 0) + 1;
-  o.last = Date.now();
+  o.hour = (o.hour || 0) + 1;
+  o.last = now;
   o.kid = kid;
   await env.GATE.put(rec, JSON.stringify(o), { expirationTtl: 60 * 60 * 24 * 90 });
 
-  /* 每 uid 一把：key = HKDF(master, "lib|uid|kid") */
-  const ek = await deriveBits(env.MASTER_SECRET, uid, kid, 'lib', 32);
-  const iv = await deriveBits(env.MASTER_SECRET, uid, kid, 'liv', 16);
+  /* 每设备一把：key = HKDF(master, "lib|did|kid") */
+  const ek = await deriveBits(env.MASTER_SECRET, did, kid, 'lib', 32);
+  const iv = await deriveBits(env.MASTER_SECRET, did, kid, 'liv', 16);
   const ct = await aesEncrypt(hexToBytes(ek), hexToBytes(iv), sealed);
 
-  return json({
-    ok: true,
-    v: 1,
-    alg: 'AES-256-CBC',
-    ek, iv, ct,
-    rev,
-    ttl: 21600,
-    serverTime: Date.now()
-  }, cors);
+  // rev 变化时客户端缓存要缩短，做到「发新版本 → 旧客户端尽快换新」
+  const ttl = rev !== '0' ? 300 : 21600;
+
+  return json({ ok: true, v: 3, alg: 'AES-256-CBC', ek, iv, ct, rev, ttl, serverTime: now }, cors);
 }
 
 /* ------------------------------------------------------------ 管理接口 */
@@ -99,7 +104,13 @@ async function admin(request, env, url, cors) {
   if (url.pathname === '/admin/stats') {
     const users = await env.GATE.list({ prefix: 'uid:' });
     const libs = await env.GATE.list({ prefix: 'lib:' });
-    return json({ ok: true, users: users.keys.length, libs: libs.keys.map((k) => k.name.replace('lib:', '')) }, cors);
+    const libInfo = [];
+    for (const k of libs.keys) {
+      const id = k.name.replace('lib:', '');
+      const code = await env.GATE.get(k.name);
+      libInfo.push({ kid: id, bytes: code ? code.length : 0, rev: (await env.GATE.get('rev:' + id)) || '0' });
+    }
+    return json({ ok: true, users: users.keys.length, libs: libInfo.map((x) => x.kid), libInfo }, cors);
   }
 
   if (url.pathname === '/admin/lib') {
@@ -131,10 +142,22 @@ async function admin(request, env, url, cors) {
   }
 
   if (url.pathname === '/admin/ban') {
-    if (!body.uid) return json({ ok: false, err: 'uid required' }, cors, 400);
-    if (body.unban) await env.GATE.delete('ban:' + body.uid);
-    else await env.GATE.put('ban:' + body.uid, '1');
-    return json({ ok: true, uid: body.uid, banned: !body.unban }, cors);
+    const target = body.did || body.uid;
+    if (!target) return json({ ok: false, err: 'did required' }, cors, 400);
+    if (body.unban) await env.GATE.delete('ban:' + target);
+    else await env.GATE.put('ban:' + target, '1');
+    return json({ ok: true, did: target, banned: !body.unban }, cors);
+  }
+
+  /* 列出所有设备（用于定位泄露 / 封禁） */
+  if (url.pathname === '/admin/users') {
+    const l = await env.GATE.list({ prefix: 'uid:' });
+    const out = [];
+    for (const k of l.keys.slice(0, 200)) {
+      const v = await env.GATE.get(k.name);
+      out.push(Object.assign({ did: k.name.slice(4) }, v ? JSON.parse(v) : {}));
+    }
+    return json({ ok: true, count: l.keys.length, users: out }, cors);
   }
 
   if (url.pathname === '/admin/revoke') {

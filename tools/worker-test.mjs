@@ -41,22 +41,18 @@ fs.unlinkSync(tmp);
 
 const MASTER = crypto.randomBytes(32).toString('hex');
 const ADMIN = 'admin-test-token';
-const KID_SECRET = 'kid-secret-test';
 
 function newEnv() {
-  return { GATE: makeKV(), MASTER_SECRET: MASTER, ADMIN_TOKEN: ADMIN, KID_SECRET };
+  return { GATE: makeKV(), MASTER_SECRET: MASTER, ADMIN_TOKEN: ADMIN, RATE_LIMIT: '5' };
 }
 
 /* ------------------------------------------------ 请求辅助 */
-const UID = 'aabbccddeeff0011';
+const DID = 'aabbccddeeff0011';
 function req(url, { method = 'GET', headers = {}, body } = {}) {
   return new Request(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
 }
 const call = (env, url, opt) => worker.fetch(req(url, opt), env, {});
 
-function sig(uid, kid, ts, secret = KID_SECRET) {
-  return crypto.createHmac('sha256', secret).update(`${uid}|${kid}|${ts}`).digest('hex');
-}
 
 /** 本地解 AES-CBC，验证 Worker 下发的密文真的能解出原文 */
 function decryptPayload(p) {
@@ -95,7 +91,7 @@ let issued;
   const env = newEnv();
   await call(env, BASE + '/admin/lib', { method: 'POST', headers: { Authorization: 'Bearer ' + ADMIN }, body: { kid: 'test', code: LIB_CODE } });
   const ts = String(Date.now());
-  const r = await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Uid': UID, 'X-Sig': sig(UID, 'test', ts) } });
+  const r = await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Did': DID } });
   const j = await r.json();
   issued = j;
   j.ok === true ? ok('拿到 lib 包') : no('/k 失败', JSON.stringify(j));
@@ -108,19 +104,37 @@ let issued;
   ok('每次请求的 ek 都随 uid 派生，非随机下发');
 }
 
-console.log('\n[4] 签名校验');
+console.log('\n[4] 设备身份校验（v3：不再依赖共享密钥）');
 {
   const env = newEnv();
   await call(env, BASE + '/admin/lib', { method: 'POST', headers: { Authorization: 'Bearer ' + ADMIN }, body: { kid: 'test', code: LIB_CODE } });
   const ts = String(Date.now());
-  const bad = await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Uid': UID, 'X-Sig': 'deadbeef' } });
-  bad.status === 403 ? ok('错误签名被拒') : no('签名未校验', bad.status);
 
-  const oldTs = String(Date.now() - 10 * 60 * 1000);
-  const expired = await call(env, `${BASE}/k?kid=test&ts=${oldTs}`, { headers: { 'X-Uid': UID, 'X-Sig': sig(UID, 'test', oldTs) } });
-  oldTs ? await expired.json().then((j) => {
-    (expired.status === 403) ? ok('过期时间戳被拒（防重放）') : no('时间窗未校验', expired.status);
-  }) : null;
+  // 没有设备标识 → 拒绝
+  const noDid = await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: {} });
+  noDid.status === 400 ? ok('缺 X-Did 被拒') : no('设备标识未校验', noDid.status);
+
+  // 时间窗
+  const oldTs = String(Date.now() - 15 * 60 * 1000);
+  const expired = await call(env, `${BASE}/k?kid=test&ts=${oldTs}`, { headers: { 'X-Did': DID } });
+  expired.status === 400 ? ok('时间戳超出 10 分钟窗口被拒（防重放）') : no('时间窗未校验', expired.status);
+
+  // 同一设备稳定拿到同一把密钥（设备绑定）
+  const a = await (await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Did': DID } })).json();
+  const b = await (await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Did': DID } })).json();
+  (a.ok && b.ok && a.ek === b.ek) ? ok('同一设备 ek 恒定（设备绑定）') : no('ek 不稳定');
+
+  // 不同设备 → 不同密钥（泄露只影响自己）
+  const c = await (await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Did': 'other-device-xyz' } })).json();
+  (c.ok && c.ek !== a.ek) ? ok('不同设备密钥不同（不共享）') : no('密钥未按设备隔离');
+
+  // 限流
+  let hit429 = false;
+  for (let i = 0; i < 12; i++) {
+    const r = await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Did': 'flood-device-123' } });
+    if (r.status === 429) { hit429 = true; break; }
+  }
+  hit429 ? ok('单设备超频被限流 (429)') : no('未触发限流');
 }
 
 console.log('\n[5] 拉黑 / 解封');
@@ -129,15 +143,15 @@ console.log('\n[5] 拉黑 / 解封');
   await call(env, BASE + '/admin/lib', { method: 'POST', headers: { Authorization: 'Bearer ' + ADMIN }, body: { kid: 'test', code: LIB_CODE } });
   const get = async () => {
     const ts = String(Date.now());
-    return call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Uid': UID, 'X-Sig': sig(UID, 'test', ts) } });
+    return call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Did': DID } });
   };
   (await get()).status === 200 ? ok('拉黑前可正常取用') : no('拉黑前就失败');
 
-  await call(env, BASE + '/admin/ban', { method: 'POST', headers: { Authorization: 'Bearer ' + ADMIN }, body: { uid: UID } });
+  await call(env, BASE + '/admin/ban', { method: 'POST', headers: { Authorization: 'Bearer ' + ADMIN }, body: { did: DID } });
   const r2 = await get();
   (await r2.json()).err === 'banned' ? ok('拉黑后立即拒绝（无需重新分发书源）') : no('拉黑无效', r2.status);
 
-  await call(env, BASE + '/admin/ban', { method: 'POST', headers: { Authorization: 'Bearer ' + ADMIN }, body: { uid: UID, unban: true } });
+  await call(env, BASE + '/admin/ban', { method: 'POST', headers: { Authorization: 'Bearer ' + ADMIN }, body: { did: DID, unban: true } });
   (await get()).status === 200 ? ok('解封后恢复正常') : no('解封失败');
 }
 
@@ -147,7 +161,7 @@ console.log('\n[6] 全局吊销 rev');
   await call(env, BASE + '/admin/lib', { method: 'POST', headers: { Authorization: 'Bearer ' + ADMIN }, body: { kid: 'test', code: LIB_CODE } });
   await call(env, BASE + '/admin/revoke', { method: 'POST', headers: { Authorization: 'Bearer ' + ADMIN }, body: { kid: 'test', on: true } });
   const ts = String(Date.now());
-  const r = await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Uid': UID, 'X-Sig': sig(UID, 'test', ts) } });
+  const r = await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Did': DID } });
   const j = await r.json();
   (j.ok && j.rev && j.rev !== '0') ? ok('下发时带上 rev（客户端据此缩短缓存）') : no('rev 未生效', JSON.stringify(j));
 }
@@ -156,10 +170,10 @@ console.log('\n[7] 边界：uid 非法 / lib 不存在');
 {
   const env = newEnv();
   const ts = String(Date.now());
-  const short = await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Uid': 'ab', 'X-Sig': 'x' } });
+  const short = await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Did': 'ab' } });
   short.status === 400 ? ok('uid 太短被拒') : no('uid 未校验', short.status);
 
-  const noLib = await call(env, `${BASE}/k?kid=nope&ts=${ts}`, { headers: { 'X-Uid': UID, 'X-Sig': sig(UID, 'nope', ts) } });
+  const noLib = await call(env, `${BASE}/k?kid=nope&ts=${ts}`, { headers: { 'X-Did': DID } });
   (await noLib.json()).err === 'no such lib' ? ok('lib 不存在返回明确错误') : no('错误不明确');
 }
 
@@ -168,7 +182,7 @@ console.log('\n[8] 统计接口');
   const env = newEnv();
   await call(env, BASE + '/admin/lib', { method: 'POST', headers: { Authorization: 'Bearer ' + ADMIN }, body: { kid: 'test', code: LIB_CODE } });
   const ts = String(Date.now());
-  await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Uid': UID, 'X-Sig': sig(UID, 'test', ts) } });
+  await call(env, `${BASE}/k?kid=test&ts=${ts}`, { headers: { 'X-Did': DID } });
   const r = await call(env, BASE + '/admin/stats', { headers: { Authorization: 'Bearer ' + ADMIN } });
   const j = await r.json();
   (j.users >= 1 && Array.isArray(j.libs)) ? ok(`能统计到 uid（${j.users} 个）与 lib 列表`) : no('统计异常', JSON.stringify(j));
@@ -180,7 +194,7 @@ console.log('\n[9] 大 lib（300KB）不再爆栈');
   const big = 'var lib = {' + Array.from({ length: 6000 }, (_, i) => `k${i}:${i}`).join(',') + '};';
   await call(env, BASE + '/admin/lib', { method: 'POST', headers: { Authorization: 'Bearer ' + ADMIN }, body: { kid: 'big', code: big } });
   const ts = String(Date.now());
-  const r = await call(env, `${BASE}/k?kid=big&ts=${ts}`, { headers: { 'X-Uid': UID, 'X-Sig': sig(UID, 'big', ts) } });
+  const r = await call(env, `${BASE}/k?kid=big&ts=${ts}`, { headers: { 'X-Did': DID } });
   const j = await r.json();
   try {
     decryptPayload(j) === big ? ok(`300KB lib 正常加解密（${(big.length / 1024).toFixed(0)}KB）`) : no('大文件内容不一致');

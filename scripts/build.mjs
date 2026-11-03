@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { selfCalibrate } from './selfcal.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -78,15 +79,40 @@ function injectHublib(jsLib, key) {
         `function hotLib() { try { return HOT.lib(false); } catch (e) { try { java.log('hotLib 不可用: ' + e); } catch (e2) { } return null; } }`,
         ...(GATE_ON ? [
           gateJs,
-          `/* --- 门禁：逻辑不在这个文件里，规则靠它现场向下发 --- */`,
-          `var GATE = createGate(java, source, {`,
+          `/* --- 门禁 ------------------------------------------------------------`,
+          ` * 注意：jsLib 求值时没有 java / source，所以这里绝不能直接 createGate(java, source)。`,
+          ` * 改为首次被调用时用 this 取上下文并缓存（Legado 的规则作用域链着 jsLib，`,
+          ` * this 能拿到 bindings 里的 java/source）。已用 Rhino 1.7.14 实测。`,
+          ` * ------------------------------------------------------------------ */`,
+          `var GATE_CFG = {`,
           `  urls: ${JSON.stringify(GATE_URLS)},`,
-          `  kid: ${JSON.stringify(key)},`,
-          `  sigSecret: ${JSON.stringify(GATE.sigSecret || GATE.kidSecret || '')}`,
-          `});`,
-          `/* 规则里统一用 GLIB().xxx() 取逻辑；门禁失败会抛错（不静默降级到本地明文） */`,
-          `function GLIB() { return GATE.lib(); }`,
-          `function GCALL(n) { return GATE.call.apply(GATE, arguments); }`,
+          `  kid: ${JSON.stringify(key)}`,
+          `};`,
+          `var _GATE = null, _GCTX = null;`,
+          `function GDPKG() {`,
+          `  /* 源配置可能变（用户换站点），变了就重建 */`,
+          `  var origin = '';`,
+          `  try { origin = String((source && source.bookSourceUrl) || ''); } catch (e) { }`,
+          `  if (_GATE && _GCTX && _GCTX.origin === origin) return _GATE;`,
+          `  var j = this.java || (_GCTX && _GCTX.java);`,
+          `  var s = this.source || (_GCTX && _GCTX.source);`,
+          `  if (!j || !s) throw new Error('门禁初始化失败：拿不到 java/source（请更新书源）');`,
+          `  _GCTX = { java: j, source: s, origin: origin };`,
+          `  var c = {}; for (var k in GATE_CFG) c[k] = GATE_CFG[k];`,
+          `  c.origin = origin;`,
+          `  _GATE = createGate(j, s, c);`,
+          `  return _GATE;`,
+          `}`,
+          `/* 规则里统一用 GLIB('方法名', ...参数) 调用远程逻辑；`,
+          `   门禁失败会抛错，绝不静默降级到本地明文。 */`,
+          `function GLIB(name) {`,
+          `  var g = GDPKG.call(this);`,
+          `  var args = Array.prototype.slice.call(arguments, 1);`,
+          `  return g.run(this, g.code(), name, args);`,
+          `}`,
+          `/* 不传方法名：执行源码并返回最后一个表达式（兼容老写法） */`,
+          `function GEVAL() { var g = GDPKG.call(this); return g.run(this, g.code()); }`,
+          `function GINFO() { return GDPKG.call(this).info(); }`,
         ] : []),
         END
     ].join('\n');
@@ -111,15 +137,30 @@ for (const f of listJson(SRC)) {
     const withLib = arr.map((s) => {
         const o = Object.assign({}, s);
         o.jsLib = injectHublib(o.jsLib, key);
-        // 让源自己解释清楚变量用途（用户在「变量」里能看到）
-        o.variableComment = [
-            '本源的抓取逻辑在 GitHub 上热更新（改代码不用重导）。',
-            `仓库：${CFG.owner}/${CFG.repo} · 文件：dist/libs/lib-${key}.js`,
-            '变量里只存你自己的配置（如站点地址/密钥），不会被更新覆盖。',
-            meta.variableComment || ''
-        ].filter(Boolean).join('\n');
+
+        /* ⚠️ variableComment 绝对不能覆盖！
+           本站书源把它当成「加密的自校验代码」容器，getUrl() 会做
+           AES 解密后 eval —— 混入任何说明文字都会让解密直接失败。
+           说明文字改放 bookSourceComment。 */
+        const keepVC = !!o.variableComment && String(o.variableComment).trim().length > 0;
+        const note = [
+            '本源的抓取逻辑在仓库里热更新（改代码不用重导）。',
+            `仓库：${CFG.owner}/${CFG.repo}`
+        ].join(' ');
+        if (!keepVC) o.variableComment = [note, meta.variableComment || ''].filter(Boolean).join('\n');
+        else if (meta.variableComment) o.bookSourceComment = [o.bookSourceComment, meta.variableComment].filter(Boolean).join('\n');
         return o;
     });
+
+    /* 书源若内置了三重 MD5 自校验（md5(searchUrl)/md5(jsLib)/md5(exploreUrl)），
+       注入库与替换 exploreUrl 会让它失效 —— 这里按最终字段重算并写回。 */
+    if (CFG.selfcal && CFG.selfcal.key) {
+        for (const o of withLib) {
+            const r = selfCalibrate(o, CFG.selfcal.key);
+            if (r.ok && r.changed) ok(`${key}: 自校验值已校准（${Object.keys(r.after).filter(k=>r.before[k]!==r.after[k]).join(',')}）`);
+            else if (!r.ok && !r.skipped) ok(`${key}: 自校准跳过（${r.reason || '无内置校验'}）`);
+        }
+    }
 
     const body = JSON.stringify(withLib, null, 2);
     const first = withLib[0];

@@ -33,7 +33,7 @@ for (const f of fs.readdirSync(SRC).filter(x => x.endsWith('.json'))) {
     if (!/^@js:/.test(v)) continue;
     if (/java\.(get|ajax|connect|post)\s*\(/.test(v)) { console.log(`  ! ${key}.${field} 含网络请求，跳过`); continue; }
     moved[field] = v;
-    o[field] = `@js:\nGLIB().${field === 'exploreUrl' ? 'explore' : field}(getUrl());`;
+    o[field] = `@js:\nGLIB('${field === 'exploreUrl' ? 'explore' : field}', getUrl());`;
   }
 
   if (!Object.keys(moved).length) { console.log(`  - ${key}: 无可迁移字段`); continue; }
@@ -44,9 +44,9 @@ for (const f of fs.readdirSync(SRC).filter(x => x.endsWith('.json'))) {
   const body = Object.entries(moved).map(([field, code]) => {
     // 去掉前缀 @js: ，只留 JS 表达式
     const js = code.replace(/^@js:\s*/, '');
-    // 原代码自己可能声明了 burl，避免重复声明
     const renamed = js.replace(/\bvar burl\b/g, 'var _burl').replace(/\blet burl\b/g, 'let _burl');
-    return `  ${field === 'exploreUrl' ? 'explore' : field}: function (burl) {\n${renamed.split('\n').map(l => '    ' + l).join('\n')}\n  }`;
+    // 包一层 IIFE：里面的 getUrl()/cache/source 都从 gate 还原好的上下文取
+    return `  ${field === 'exploreUrl' ? 'explore' : field}: function (burl) {\n    (function () {\n${renamed.split('\n').map(l => '      ' + l).join('\n')}\n    }).call(this);\n  }`;
   }).join(',\n\n');
 
   const libSrc = `/* lib-${key}.js —— ${key} 的远程逻辑（只存在于门禁 KV，仓库里没有）
