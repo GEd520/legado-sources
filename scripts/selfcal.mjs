@@ -16,7 +16,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-export function selfCalibrate(sourceObj, key) {
+export function selfCalibrate(sourceObj, key, override) {
+  override = override || {};
   if (!key) return { skipped: true };
 
   const vc = sourceObj.variableComment || '';
@@ -36,10 +37,21 @@ export function selfCalibrate(sourceObj, key) {
   if (!m) return { skipped: true, reason: '未发现内置校验段' };
 
   const md5 = (s) => crypto.createHash('md5').update(s, 'utf8').digest('hex');
+
+  /* ⚠️ 关键：jsLib 的校验值必须按**用户实际持有的最终 jsLib** 算，
+     而注入代码会在后面改掉它。所以这里要求调用方传入「已定稿的 jsLib」，
+     没传就退回对象当前的 jsLib。
+
+     更麻烦的是：书源在 jsLib 求值过程中就会自检一次，那时的 source.jsLib
+     已经是完整内容；之后再求值也是同一份。只要自检用同一份最终内容，
+     校验值就是稳定的。 */
+  const finalJsLib = override.jsLib !== undefined ? override.jsLib : (sourceObj.jsLib || '');
+  const finalExplore = override.exploreUrl !== undefined ? override.exploreUrl : (sourceObj.exploreUrl || '');
+
   const want = {
     searchUrl: md5(sourceObj.searchUrl || ''),
-    jsLib: md5(sourceObj.jsLib || ''),
-    exploreUrl: md5(sourceObj.exploreUrl || ''),
+    jsLib: md5(finalJsLib),
+    exploreUrl: md5(finalExplore),
   };
   const found = [...m[1].matchAll(/["']([0-9a-f]{32})["']/g)].map((x) => x[1]);
 

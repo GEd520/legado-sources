@@ -46,7 +46,13 @@ for (const f of fs.readdirSync(SRC).filter(x => x.endsWith('.json'))) {
     const js = code.replace(/^@js:\s*/, '');
     const renamed = js.replace(/\bvar burl\b/g, 'var _burl').replace(/\blet burl\b/g, 'let _burl');
     // 包一层 IIFE：里面的 getUrl()/cache/source 都从 gate 还原好的上下文取
-    return `  ${field === 'exploreUrl' ? 'explore' : field}: function (burl) {\n    (function () {\n${renamed.split('\n').map(l => '      ' + l).join('\n')}\n    }).call(this);\n  }`;
+    // IIFE 必须 return：原规则以最后一行表达式作为结果
+    const lines = renamed.split('\n');
+    const lastIdx = lines.map((l, i) => (l.trim() ? i : -1)).filter(i => i >= 0).pop();
+    if (lastIdx !== undefined && !/^\s*return\b/.test(lines[lastIdx])) {
+        lines[lastIdx] = 'return ' + lines[lastIdx].trim();
+    }
+    return `  ${field === 'exploreUrl' ? 'explore' : field}: function (burl) {\n    return (function () {\n${lines.map(l => '      ' + l).join('\n')}\n    }).call(this);\n  }`;
   }).join(',\n\n');
 
   const libSrc = `/* lib-${key}.js —— ${key} 的远程逻辑（只存在于门禁 KV，仓库里没有）

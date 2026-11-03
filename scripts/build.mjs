@@ -67,7 +67,11 @@ function injectHublib(jsLib, key) {
     const b = lib.indexOf(BEGIN), e = lib.indexOf(END);
     if (b >= 0 && e > b) lib = lib.slice(0, b) + lib.slice(e + END.length);
 
-    const header = [
+    const hubJs = read(path.join(ROOT, 'libs', 'hub.js'));
+    const hotJs = read(path.join(ROOT, 'libs', 'hotload.js'));
+    const gateJs = GATE_ON ? read(path.join(ROOT, 'libs', 'gate.js')) : '';
+
+    const block = [
         BEGIN,
         `/* 本块由 build.mjs 生成。想改请改仓库 libs/ 下的源文件，然后重跑构建。 */`,
         hubJs,
@@ -86,9 +90,10 @@ function injectHublib(jsLib, key) {
           ` * ------------------------------------------------------------------ */`,
           `var GATE_CFG = {`,
           `  urls: ${JSON.stringify(GATE_URLS)},`,
-          `  kid: ${JSON.stringify(key)}`,
+          `  kid: ${JSON.stringify(key)},`,
+          `  provide: ["getUrl","seturlo","getInfo","getSecretKey","csho","ua","api"]`,
           `};`,
-          `var _GATE = null, _GCTX = null;`,
+          `var _GATE = null, _GCTX = null, c_host = null;`,
           `function GDPKG() {`,
           `  /* 源配置可能变（用户换站点），变了就重建 */`,
           `  var origin = '';`,
@@ -97,8 +102,11 @@ function injectHublib(jsLib, key) {
           `  var j = this.java || (_GCTX && _GCTX.java);`,
           `  var s = this.source || (_GCTX && _GCTX.source);`,
           `  if (!j || !s) throw new Error('门禁初始化失败：拿不到 java/source（请更新书源）');`,
+          `  /* this 上直接带宿主对象：cache 在规则作用域里是单独绑定的，不在 source 属性上 */`,
           `  _GCTX = { java: j, source: s, origin: origin };`,
+          `  c_host = { java: j, source: s, cache: this.cache, book: this.book };`,
           `  var c = {}; for (var k in GATE_CFG) c[k] = GATE_CFG[k];`,
+          `  c.host = c_host;`,
           `  c.origin = origin;`,
           `  _GATE = createGate(j, s, c);`,
           `  return _GATE;`,
@@ -117,7 +125,7 @@ function injectHublib(jsLib, key) {
         END
     ].join('\n');
 
-    return header + '\n' + lib.replace(/^\s+/, '');
+    return (lib + '\n' + block + '\n').replace(/^\s+/, '');
 }
 
 /* --------------------------------------------------- 3. 处理每个书源 */
@@ -152,13 +160,25 @@ for (const f of listJson(SRC)) {
         return o;
     });
 
-    /* 书源若内置了三重 MD5 自校验（md5(searchUrl)/md5(jsLib)/md5(exploreUrl)），
-       注入库与替换 exploreUrl 会让它失效 —— 这里按最终字段重算并写回。 */
+    /* ── 自校验值校准（两阶段）──────────────────────────────────────────
+       书源若内置 md5(searchUrl)/md5(jsLib)/md5(exploreUrl) 三重校验，
+       注入库 + 把 exploreUrl 换成壳都会让它失效。
+
+       要点：校准必须发生在**所有字段都已定稿之后**，且只能做一次。
+       sources/src 里保留的是**原始未注入**的 jsLib 与**原始** variableComment，
+       所以每次都从源头解密 → 按最终字段重算 → 写回，结果稳定可复现。 */
     if (CFG.selfcal && CFG.selfcal.key) {
         for (const o of withLib) {
-            const r = selfCalibrate(o, CFG.selfcal.key);
-            if (r.ok && r.changed) ok(`${key}: 自校验值已校准（${Object.keys(r.after).filter(k=>r.before[k]!==r.after[k]).join(',')}）`);
-            else if (!r.ok && !r.skipped) ok(`${key}: 自校准跳过（${r.reason || '无内置校验'}）`);
+            /* 传入「最终态」的 jsLib 与 exploreUrl —— 用户拿到的就是这两份 */
+            const r = selfCalibrate(o, CFG.selfcal.key, { jsLib: o.jsLib, exploreUrl: o.exploreUrl });
+            if (r.ok && r.changed) {
+                const diff = Object.keys(r.after).filter((k) => r.before[k] !== r.after[k]);
+                ok(`${key}: 自校验值已校准（${diff.join(',')}）`);
+            } else if (r.ok && !r.changed) {
+                ok(`${key}: 自校验值与当前字段一致`);
+            } else {
+                ok(`${key}: 自校准跳过（${r.reason || '源里没有内置校验'}）`);
+            }
         }
     }
 
