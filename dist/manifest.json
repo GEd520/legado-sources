@@ -1,7 +1,7 @@
 {
   "schema": 2,
-  "version": "1793692039186",
-  "updated": "2026-11-03 07:47:19",
+  "version": "1793692159020",
+  "updated": "2026-11-03 07:49:19",
   "rawBase": "https://raw.githubusercontent.com/GEd520/legado-sources/main/",
   "mirrors": [
     "",
@@ -21,7 +21,7 @@
       "version": "1785855451798",
       "lastUpdateTime": 1785855451798,
       "file": "dist/ailisi.json",
-      "sha256": "59c35436846a700f",
+      "sha256": "2c627d9c69b0be4e",
       "hot": false,
       "gated": true
     },
@@ -36,7 +36,7 @@
       "version": "1791699045017",
       "lastUpdateTime": 1791699045017,
       "file": "dist/jenshimanhua.json",
-      "sha256": "6f1870a903cdeac9",
+      "sha256": "388ab2332600b538",
       "hot": false,
       "gated": true
     }
@@ -45,11 +45,11 @@
     {
       "key": "console",
       "name": "🌐 书源控制台",
-      "version": "1793692039186",
+      "version": "1793692159020",
       "desc": "书源/订阅源总控面板",
       "file": "dist/rss/console.json",
-      "sha256": "d934a32c1db255e2"
+      "sha256": "6982a76551fef185"
     }
   ],
-  "bundleSha": "d20695e39820f1ef"
+  "bundleSha": "5f01635590efc109"
 }

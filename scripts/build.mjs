@@ -143,9 +143,10 @@ function injectHublib(jsLib, key) {
     if (LEGACY2.test(lib)) lib = lib.replace(LEGACY2, '\n');
     lib = lib.replace(/\n{3,}/g, '\n\n').replace(/^\s+/, '');
 
-    const hubJs = read(path.join(ROOT, 'libs', 'hub.js'));
-    const hotJs = read(path.join(ROOT, 'libs', 'hotload.js'));
-    const gateJs = GATE_ON ? read(path.join(ROOT, 'libs', 'gate.js')) : '';
+    /* 必须用第 1 步选好的 LIB_DIR（混淆产物 or 明文），不能在这里硬编码 libs/ */
+    const hubJs = libOf('hub.js');
+    const hotJs = libOf('hotload.js');
+    const gateJs = GATE_ON ? libOf('gate.js') : '';
 
     const block = [
         BEGIN,
