@@ -1,0 +1,5 @@
+node_modules/
+.wrangler/
+# 绝不要把 master 推上去
+../gate/master.key
+master.key

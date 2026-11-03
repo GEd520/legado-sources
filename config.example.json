@@ -1,0 +1,20 @@
+{
+  "schema": 2,
+  "owner": "YOUR_GITHUB_NAME",
+  "repo": "legado-sources",
+  "branch": "main",
+  "base": "legado-sources/",
+  "mirrors": ["", "https://ghproxy.net/", "https://gh-proxy.com/"],
+  "cacheTTL": 21600,
+  "console": {
+    "name": "🌐 书源控制台",
+    "url": "data:;base64,辞晨中心,{\"hub\":2}",
+    "group": "管理,写源"
+  },
+  "gate": {
+    "url": "https://gate.example.com",
+    "fallback": "",
+    "host": "gate.example.com",
+    "proxy": "custom"
+  }
+}

@@ -1,0 +1,14 @@
+name = "legado-gate"
+main = "main.js"
+compatibility_date = "2024-11-01"
+
+# KV：存 lib 与 uid 记录
+# 先执行： wrangler kv namespace create GATE
+# 把返回的 id 填到下面
+[[kv_namespaces]]
+binding = "GATE"
+id = "013604ec8da140deb07abd818c3c30cb"
+
+[vars]
+# 非密钥的配置放这里；真密钥用 wrangler secret put
+NOTE = "legado book-source gate"

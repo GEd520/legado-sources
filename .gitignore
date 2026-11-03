@@ -1,0 +1,22 @@
+node_modules/
+.sim-state.json
+
+# ── 绝不能进仓库 ──
+config.json
+gate/master.key
+gate/secrets.json
+*.master.key
+*.secrets.json
+.env
+.env.*
+worker/.dev.vars
+tools/.git-creds-tmp
+# wrangler 登录态 / 本地缓存
+.wrangler/
+worker/.wrangler/
+proxy/.wrangler/
+tmp-shot/
+
+# 构建时可能产生的临时物
+dist/libs/gate-*.json
+dist/libs/*.js

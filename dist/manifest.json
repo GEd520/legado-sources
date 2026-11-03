@@ -1,0 +1,55 @@
+{
+  "schema": 2,
+  "version": "1793689514840",
+  "updated": "2026-11-03 07:05:14",
+  "rawBase": "https://raw.githubusercontent.com/GEd520/legado-sources/main/",
+  "mirrors": [
+    "",
+    "https://ghproxy.net/",
+    "https://gh-proxy.com/"
+  ],
+  "bundle": "dist/all.json",
+  "bookSources": [
+    {
+      "key": "ailisi",
+      "name": "🌸 爱丽丝🔞◎辞晨◎",
+      "group": "写源,🔞精品",
+      "type": 0,
+      "enabled": true,
+      "desc": "//2026.8.4 by.◎辞晨◎\n//❗仅用于学习交流，不得用于违法用途❗\n//防倒卖，请在登录UI界面输入作者名：\n辞晨",
+      "deprecated": false,
+      "version": "1785855451798",
+      "lastUpdateTime": 1785855451798,
+      "file": "dist/ailisi.json",
+      "sha256": "bd119b2c6e10e8b5",
+      "hot": false,
+      "gated": true
+    },
+    {
+      "key": "jenshimanhua",
+      "name": "🌐绅士漫画◎辞晨◎",
+      "group": "写源",
+      "type": 2,
+      "enabled": true,
+      "desc": "//2026.10.11 by.◎辞晨◎\n//❗仅用于学习交流，不得用于违法用途❗\n//防倒卖，请在登录UI界面输入作者名：\n辞晨",
+      "deprecated": false,
+      "version": "1791699045017",
+      "lastUpdateTime": 1791699045017,
+      "file": "dist/jenshimanhua.json",
+      "sha256": "5de87c198e53e257",
+      "hot": false,
+      "gated": true
+    }
+  ],
+  "rss": [
+    {
+      "key": "console",
+      "name": "🌐 书源控制台",
+      "version": "1793689514840",
+      "desc": "书源/订阅源总控面板",
+      "file": "dist/rss/console.json",
+      "sha256": "3bb72cb6b6283e05"
+    }
+  ],
+  "bundleSha": "3adc70ec040e3304"
+}
