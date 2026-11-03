@@ -20,3 +20,6 @@ tmp-shot/
 # 构建时可能产生的临时物
 dist/libs/gate-*.json
 dist/libs/*.js
+
+# ── 受保护的远程逻辑：只存于门禁 KV + 本机，绝不进公开仓库 ──
+sources/libs/
